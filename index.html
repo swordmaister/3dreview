@@ -1,9 +1,9 @@
-<!DOCTYPE html><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>3D World Viewer - Pro</title>
+    <title>3D World Viewer - Fixed Camera</title>
     <style>
         body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; color: #fff; font-family: sans-serif; }
         #container { display: flex; height: 100vh; width: 100vw; }
@@ -19,27 +19,21 @@
         }
         .toolbar button:active { transform: translateY(1px); }
         
-        /* ボタンの色分け */
         .btn-run { background: #0e639c; color: white; flex-grow: 2; border-color: #0e639c; font-size: 12px; }
         .btn-fs { background: #d67f00; color: white; border-color: #d67f00; flex-grow: 1; }
         .btn-action { background: #444; }
-        .btn-clear { background: #6e3535; color: #ffcccc; } /* 赤みを持たせる */
+        .btn-clear { background: #6e3535; color: #ffcccc; }
 
-        /* ファイル入力隠し */
         .file-label { background: #2d2d2d !important; }
 
-        /* スロットエリア */
         .slots { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; padding: 4px; background: #2d2d2d; }
         .slot-btn { font-size: 10px; padding: 4px; border: none; cursor: pointer; color: #ddd; }
         .save { background: #503030; } .load { background: #305035; }
         
-        /* エディタ本体 */
         #code-editor { flex-grow: 1; background: #1e1e1e; color: #d4d4d4; border: none; padding: 10px; font-family: monospace; font-size: 13px; outline: none; resize: none; white-space: pre; overflow-x: auto; }
         
-        /* ビューワーエリア */
         #viewer-pane { flex-grow: 1; position: relative; }
         
-        /* 全画面モード制御 */
         body.fullscreen-mode #editor-pane { transform: translateX(-350px); width: 0; min-width: 0; }
         #close-btn { position: absolute; top: 15px; left: 15px; width: 44px; height: 44px; background: rgba(200, 50, 50, 0.8); color: white; border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; font-size: 24px; cursor: pointer; display: none; z-index: 100; align-items: center; justify-content: center; backdrop-filter: blur(5px); }
         body.fullscreen-mode #close-btn { display: flex; }
@@ -47,7 +41,7 @@
     
     <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    <script src="https://unpkg.com/three@0.128.0/examples/js/utils/WebVR.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/webxr/VRButton.js"></script>
 </head>
 <body>
 
@@ -72,11 +66,16 @@
         
         <textarea id="code-editor" spellcheck="false" placeholder="// Pasteボタンでコードを貼り付けるか、直接入力してください...">
 // --- 初期サンプル ---
+// マウスドラッグで視点移動
 const geo = new THREE.TorusKnotGeometry(1, 0.3, 100, 16);
 const mat = new THREE.MeshNormalMaterial();
 const mesh = new THREE.Mesh(geo, mat);
 mesh.position.set(0, 1.6, -3);
 scene.add(mesh);
+
+// 足元のグリッド
+const grid = new THREE.GridHelper(20, 20);
+scene.add(grid);
 
 function update(t) {
     mesh.rotation.x = t * 0.001;
@@ -95,45 +94,39 @@ function update(t) {
     let scene, camera, renderer, controls, updateFunc = null;
 
     // --- UI アクション ---
-    
-    // 1. コピー
     function copyCode() {
         const t = document.getElementById('code-editor');
         t.select();
         navigator.clipboard.writeText(t.value).then(() => alert('コピーしました'));
     }
 
-    // 2. ペースト（クリアしてから貼り付け）
     async function pasteCode() {
         try {
             const text = await navigator.clipboard.readText();
             const editor = document.getElementById('code-editor');
-            editor.value = ''; // まずクリア
-            editor.value = text; // 貼り付け
-            // runCode(); // ※お好みで自動実行する場合はこのコメントアウトを外す
+            editor.value = text; 
+            // 貼り付け後に自動実行したければ下の行を有効化
+            // runCode(); 
         } catch(e) {
-            alert('ペースト権限がありません。手動で貼り付けてください。');
+            alert('ペースト権限がありません。Ctrl+Vで貼り付けてください。');
         }
     }
 
-    // 3. クリア
     function clearCode() {
         if(confirm('エディタの内容を消去しますか？')) {
             document.getElementById('code-editor').value = '';
         }
     }
 
-    // 4. 全画面（実行してから切り替え）
     function toggleFS() {
-        // 全画面になる前に、現在のコードを反映させる
         if (!document.body.classList.contains('fullscreen-mode')) {
             runCode();
         }
         document.body.classList.toggle('fullscreen-mode');
-        // リサイズ調整待ち
         setTimeout(() => {
-            const w = document.getElementById('viewer-pane').clientWidth;
-            const h = document.getElementById('viewer-pane').clientHeight;
+            const container = document.getElementById('viewer-pane');
+            const w = container.clientWidth;
+            const h = container.clientHeight;
             if(camera && renderer) {
                 camera.aspect = w / h;
                 camera.updateProjectionMatrix();
@@ -142,7 +135,6 @@ function update(t) {
         }, 350);
     }
 
-    // 5. ファイル読み込み
     function loadFile(input) {
         const file = input.files[0];
         if (!file) return;
@@ -155,12 +147,14 @@ function update(t) {
         reader.readAsText(file);
     }
 
-    // --- Three.js 初期化 & 実行ロジック ---
+    // --- Three.js 初期化 ---
     function init() {
         if (typeof THREE === 'undefined') { setTimeout(init, 100); return; }
         
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0x111111);
+        
+        // カメラ初期位置 (runCodeで上書きされる前提)
         camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         camera.position.set(0, 1.6, 5);
 
@@ -168,253 +162,75 @@ function update(t) {
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.xr.enabled = true;
         renderer.shadowMap.enabled = true;
-        document.getElementById('canvas-container').appendChild(renderer.domElement);
-        if (typeof VRButton !== 'undefined') document.body.appendChild(VRButton.createButton(renderer));
+        
+        const container = document.getElementById('canvas-container');
+        container.appendChild(renderer.domElement);
+        
+        // VRボタンの追加
+        if (typeof VRButton !== 'undefined') {
+            document.body.appendChild(VRButton.createButton(renderer));
+        }
 
         controls = new THREE.OrbitControls(camera, renderer.domElement);
         controls.target.set(0, 1.6, 0);
-        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+        controls.update();
 
+        // アニメーションループ
         renderer.setAnimationLoop((time) => {
-            if (updateFunc) try { updateFunc(time); } catch(e) {}
+            if (updateFunc) {
+                try { updateFunc(time); } catch(e) { console.error(e); updateFunc = null; }
+            }
             controls.update();
             renderer.render(scene, camera);
         });
 
         window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
-        runCode();
-    }
-
-    function runCode() {
-        const code = document.getElementById('code-editor').value;
-        // ライト以外のオブジェクトをクリア
-        for(let i = scene.children.length - 1; i >= 0; i--) {
-            if(scene.children[i].type !== "AmbientLight") scene.remove(scene.children[i]);
-        }
-        updateFunc = null;
-        try {
-            const f = new Function('scene', 'camera', 'renderer', 'THREE', code + '\n return typeof update!=="undefined"?update:null;');
-            updateFunc = f(scene, camera, renderer, THREE);
-        } catch (e) { console.error(e); alert("コードエラー: " + e.message); }
-    }
-    
-    function saveS(n) { localStorage.setItem('slot_'+n, document.getElementById('code-editor').value); alert('Saved Slot '+n); }
-    function loadS(n) { const d = localStorage.getItem('slot_'+n); if(d) { document.getElementById('code-editor').value = d; runCode(); } }
-
-    window.onload = init;
-</script>
-</body>
-</html>
-
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>3D World Viewer - Pro</title>
-    <style>
-        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; color: #fff; font-family: sans-serif; }
-        #container { display: flex; height: 100vh; width: 100vw; }
-        
-        /* エディタエリア */
-        #editor-pane { width: 350px; background: #1e1e1e; display: flex; flex-direction: column; border-right: 1px solid #444; z-index: 10; transition: transform 0.3s ease; }
-        
-        /* ツールバー */
-        .toolbar { padding: 8px; background: #252526; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; border-bottom: 1px solid #333; }
-        .toolbar button, .toolbar label { 
-            background: #3a3a3a; color: #eee; border: 1px solid #555; padding: 6px 10px; 
-            cursor: pointer; border-radius: 4px; font-size: 11px; font-weight: bold;
-        }
-        .toolbar button:active { transform: translateY(1px); }
-        
-        /* ボタンの色分け */
-        .btn-run { background: #0e639c; color: white; flex-grow: 2; border-color: #0e639c; font-size: 12px; }
-        .btn-fs { background: #d67f00; color: white; border-color: #d67f00; flex-grow: 1; }
-        .btn-action { background: #444; }
-        .btn-clear { background: #6e3535; color: #ffcccc; } /* 赤みを持たせる */
-
-        /* ファイル入力隠し */
-        .file-label { background: #2d2d2d !important; }
-
-        /* スロットエリア */
-        .slots { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; padding: 4px; background: #2d2d2d; }
-        .slot-btn { font-size: 10px; padding: 4px; border: none; cursor: pointer; color: #ddd; }
-        .save { background: #503030; } .load { background: #305035; }
-        
-        /* エディタ本体 */
-        #code-editor { flex-grow: 1; background: #1e1e1e; color: #d4d4d4; border: none; padding: 10px; font-family: monospace; font-size: 13px; outline: none; resize: none; white-space: pre; overflow-x: auto; }
-        
-        /* ビューワーエリア */
-        #viewer-pane { flex-grow: 1; position: relative; }
-        
-        /* 全画面モード制御 */
-        body.fullscreen-mode #editor-pane { transform: translateX(-350px); width: 0; min-width: 0; }
-        #close-btn { position: absolute; top: 15px; left: 15px; width: 44px; height: 44px; background: rgba(200, 50, 50, 0.8); color: white; border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; font-size: 24px; cursor: pointer; display: none; z-index: 100; align-items: center; justify-content: center; backdrop-filter: blur(5px); }
-        body.fullscreen-mode #close-btn { display: flex; }
-    </style>
-    
-    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
-    <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    <script src="https://unpkg.com/three@0.128.0/examples/js/utils/WebVR.js"></script>
-</head>
-<body>
-
-<div id="container">
-    <div id="editor-pane">
-        <div class="toolbar">
-            <button class="btn-run" onclick="runCode()">▶ 実行 (Run)</button>
-            <button class="btn-fs" onclick="toggleFS()">全画面/VR</button>
-        </div>
-        <div class="toolbar" style="padding-top:0;">
-            <label class="file-label" title="ファイルを開く">📂<input type="file" onchange="loadFile(this)" style="display:none"></label>
-            <button class="btn-action" onclick="copyCode()">Copy</button>
-            <button class="btn-action" onclick="pasteCode()">Paste(New)</button>
-            <button class="btn-clear" onclick="clearCode()">Clear</button>
-        </div>
-        
-        <div class="slots">
-            <script>
-                for(let i=1; i<=5; i++) document.write(`<div style="display:contents"><button class="slot-btn save" onclick="saveS(${i})">Save${i}</button><button class="slot-btn load" onclick="loadS(${i})">Load${i}</button></div>`);
-            </script>
-        </div>
-        
-        <textarea id="code-editor" spellcheck="false" placeholder="// Pasteボタンでコードを貼り付けるか、直接入力してください...">
-// --- 初期サンプル ---
-const geo = new THREE.TorusKnotGeometry(1, 0.3, 100, 16);
-const mat = new THREE.MeshNormalMaterial();
-const mesh = new THREE.Mesh(geo, mat);
-mesh.position.set(0, 1.6, -3);
-scene.add(mesh);
-
-function update(t) {
-    mesh.rotation.x = t * 0.001;
-    mesh.rotation.y = t * 0.002;
-}
-</textarea>
-    </div>
-
-    <div id="viewer-pane">
-        <button id="close-btn" onclick="toggleFS()">✕</button>
-        <div id="canvas-container" style="width:100%; height:100%;"></div>
-    </div>
-</div>
-
-<script>
-    let scene, camera, renderer, controls, updateFunc = null;
-
-    // --- UI アクション ---
-    
-    // 1. コピー
-    function copyCode() {
-        const t = document.getElementById('code-editor');
-        t.select();
-        navigator.clipboard.writeText(t.value).then(() => alert('コピーしました'));
-    }
-
-    // 2. ペースト（クリアしてから貼り付け）
-    async function pasteCode() {
-        try {
-            const text = await navigator.clipboard.readText();
-            const editor = document.getElementById('code-editor');
-            editor.value = ''; // まずクリア
-            editor.value = text; // 貼り付け
-            // runCode(); // ※お好みで自動実行する場合はこのコメントアウトを外す
-        } catch(e) {
-            alert('ペースト権限がありません。手動で貼り付けてください。');
-        }
-    }
-
-    // 3. クリア
-    function clearCode() {
-        if(confirm('エディタの内容を消去しますか？')) {
-            document.getElementById('code-editor').value = '';
-        }
-    }
-
-    // 4. 全画面（実行してから切り替え）
-    function toggleFS() {
-        // 全画面になる前に、現在のコードを反映させる
-        if (!document.body.classList.contains('fullscreen-mode')) {
-            runCode();
-        }
-        document.body.classList.toggle('fullscreen-mode');
-        // リサイズ調整待ち
-        setTimeout(() => {
             const w = document.getElementById('viewer-pane').clientWidth;
             const h = document.getElementById('viewer-pane').clientHeight;
-            if(camera && renderer) {
-                camera.aspect = w / h;
-                camera.updateProjectionMatrix();
-                renderer.setSize(w, h);
-            }
-        }, 350);
-    }
-
-    // 5. ファイル読み込み
-    function loadFile(input) {
-        const file = input.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            document.getElementById('code-editor').value = e.target.result;
-            runCode();
-            input.value = ''; 
-        };
-        reader.readAsText(file);
-    }
-
-    // --- Three.js 初期化 & 実行ロジック ---
-    function init() {
-        if (typeof THREE === 'undefined') { setTimeout(init, 100); return; }
-        
-        scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x111111);
-        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 1.6, 5);
-
-        renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.xr.enabled = true;
-        renderer.shadowMap.enabled = true;
-        document.getElementById('canvas-container').appendChild(renderer.domElement);
-        if (typeof VRButton !== 'undefined') document.body.appendChild(VRButton.createButton(renderer));
-
-        controls = new THREE.OrbitControls(camera, renderer.domElement);
-        controls.target.set(0, 1.6, 0);
-        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-
-        renderer.setAnimationLoop((time) => {
-            if (updateFunc) try { updateFunc(time); } catch(e) {}
-            controls.update();
-            renderer.render(scene, camera);
-        });
-
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.aspect = w / h;
             camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setSize(w, h);
         });
+        
         runCode();
     }
 
+    // --- 実行ロジック (ここを修正) ---
     function runCode() {
         const code = document.getElementById('code-editor').value;
-        // ライト以外のオブジェクトをクリア
-        for(let i = scene.children.length - 1; i >= 0; i--) {
-            if(scene.children[i].type !== "AmbientLight") scene.remove(scene.children[i]);
+        
+        // 1. シーンのリセット (ライトも消して、再構築させる方が安全だが、ここでは全消去)
+        while(scene.children.length > 0){ 
+            scene.remove(scene.children[0]); 
         }
+        
+        // 2. カメラ・コントロールのリセット (重要！)
+        // これをしないと、コード内でcamera.positionを設定しても、Controlsが前の位置に引き戻してしまう
+        controls.reset(); 
+        camera.position.set(0, 1.6, 5); // デフォルト位置
+        controls.target.set(0, 1.6, 0); // デフォルト注視点
+
+        // 3. デフォルト環境光 (コードで追加されなかった時の保険)
+        // scene.add(new THREE.AmbientLight(0xffffff, 0.1)); 
+
         updateFunc = null;
+
         try {
+            // Functionコンストラクタでコードを実行
             const f = new Function('scene', 'camera', 'renderer', 'THREE', code + '\n return typeof update!=="undefined"?update:null;');
             updateFunc = f(scene, camera, renderer, THREE);
-        } catch (e) { console.error(e); alert("コードエラー: " + e.message); }
+            
+            // 4. コード実行後にコントロールを更新して、新しいカメラ位置を反映させる
+            controls.update();
+            
+        } catch (e) { 
+            console.error(e); 
+            alert("コードエラー: " + e.message); 
+        }
     }
     
-    function saveS(n) { localStorage.setItem('slot_'+n, document.getElementById('code-editor').value); alert('Saved Slot '+n); }
-    function loadS(n) { const d = localStorage.getItem('slot_'+n); if(d) { document.getElementById('code-editor').value = d; runCode(); } }
+    function saveS(n) { localStorage.setItem('slot_'+n, document.getElementById('code-editor').value); alert('Slot '+n+' に保存しました'); }
+    function loadS(n) { const d = localStorage.getItem('slot_'+n); if(d) { document.getElementById('code-editor').value = d; runCode(); } else { alert('Slot '+n+' は空です'); } }
 
     window.onload = init;
 </script>
